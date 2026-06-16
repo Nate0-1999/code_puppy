@@ -12,6 +12,13 @@ from code_puppy.config import CONTEXTS_DIR
 from code_puppy.session_storage import list_sessions, load_session, save_session
 
 
+def _agent_context_overhead(agent) -> int:
+    try:
+        return max(0, int(agent._estimate_context_overhead()))
+    except Exception:
+        return 0
+
+
 # Import get_commands_help from command_handler to avoid circular imports
 # This will be defined in command_handler.py
 def get_commands_help():
@@ -131,6 +138,17 @@ def handle_compact_command(command: str) -> bool:
         )
         compaction_strategy = get_compaction_strategy()
         protected_tokens = get_protected_token_count()
+        agent_name = getattr(agent, "name", None)
+        session_id = getattr(agent, "session_id", None)
+        before_total = before_tokens + _agent_context_overhead(current_agent)
+        from code_puppy.callbacks import (
+            on_message_history_processor_end,
+            on_message_history_processor_start,
+            on_pre_compact_sync,
+        )
+
+        on_message_history_processor_start(agent_name, session_id, list(history), [])
+        on_pre_compact_sync(agent_name, compaction_strategy, len(history), before_total)
         emit_info(
             f"🤔 Compacting {len(history)} messages using {compaction_strategy} strategy... (~{before_tokens} tokens)"
         )
@@ -148,10 +166,20 @@ def handle_compact_command(command: str) -> bool:
             )
 
         if not compacted:
+            on_message_history_processor_end(
+                agent_name, session_id, list(history), 0, 0
+            )
             emit_error("Compaction failed. History unchanged.")
             return True
 
         agent.set_message_history(compacted)
+        on_message_history_processor_end(
+            agent_name,
+            session_id,
+            list(compacted),
+            0,
+            max(0, len(history) - len(compacted)),
+        )
 
         current_agent = get_current_agent()
         after_tokens = sum(
@@ -218,7 +246,30 @@ def handle_truncate_command(command: str) -> bool:
     # Always keep the first message (system message) and then keep the N-1 most recent messages
     truncated_history = [history[0]] + history[-(n - 1) :] if n > 1 else [history[0]]
 
+    from code_puppy.callbacks import (
+        on_message_history_processor_end,
+        on_message_history_processor_start,
+        on_pre_compact_sync,
+    )
+
+    agent_name = getattr(agent, "name", None)
+    session_id = getattr(agent, "session_id", None)
+    before_tokens = sum(agent.estimate_tokens_for_message(m) for m in history)
+    on_message_history_processor_start(agent_name, session_id, list(history), [])
+    on_pre_compact_sync(
+        agent_name,
+        "truncation",
+        len(history),
+        before_tokens + _agent_context_overhead(agent),
+    )
     agent.set_message_history(truncated_history)
+    on_message_history_processor_end(
+        agent_name,
+        session_id,
+        list(truncated_history),
+        0,
+        max(0, len(history) - len(truncated_history)),
+    )
     emit_success(
         f"Truncated message history from {len(history)} to {len(truncated_history)} messages (keeping system message and {n - 1} most recent)"
     )

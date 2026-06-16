@@ -995,6 +995,18 @@ async def on_user_prompt_submit(
     return await _trigger_callbacks("user_prompt_submit", prompt, session_id)
 
 
+def on_pre_compact_sync(
+    agent_name: str,
+    strategy: str,
+    message_count: int,
+    token_count: int,
+) -> List[Any]:
+    """Sync variant of :func:`on_pre_compact` for command handlers."""
+    return _trigger_callbacks_sync(
+        "pre_compact", agent_name, strategy, message_count, token_count
+    )
+
+
 async def on_pre_compact(
     agent_name: str,
     strategy: str,
